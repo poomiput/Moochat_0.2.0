@@ -13,6 +13,8 @@ import 'package:moochat/core/theming/styles.dart';
 import 'package:moochat/features/chat/data/enums/message_type.dart';
 import 'package:moochat/features/chat/data/models/chat_message_model.dart';
 import 'package:moochat/features/chat/services/image_service.dart';
+import 'package:moochat/core/services/video_service.dart';
+import 'package:moochat/features/chat/services/voice_service_simple.dart';
 import 'package:moochat/features/chat/ui/widgets/chat_option.dart';
 import 'package:moochat/features/chat/ui/widgets/custom_text_input_field.dart';
 import 'package:moochat/features/chat/ui/widgets/message_bubble_widget.dart';
@@ -95,7 +97,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         // get my uuid from shared preferences or user data
         final myUUID = await SharedPrefHelper.getString("uuid");
 
-        // For image messages, convert to Base64 for transmission
+        // For media messages, convert to Base64 for transmission
         String messageText = message.text;
         if (message.type == MessageType.image) {
           final String? base64Image = await ImageService.imageToBase64(
@@ -106,6 +108,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             LoggerDebug.logger.i('Converted image to Base64 for transmission');
           } else {
             LoggerDebug.logger.e('Failed to convert image to Base64');
+            return; // Don't send if conversion fails
+          }
+        } else if (message.type == MessageType.voice) {
+          final String? base64Voice = await VoiceServiceSimple.voiceToBase64(
+            message.text,
+          );
+          if (base64Voice != null) {
+            messageText = base64Voice;
+            LoggerDebug.logger.i('Converted voice to Base64 for transmission');
+          } else {
+            LoggerDebug.logger.e('Failed to convert voice to Base64');
+            return; // Don't send if conversion fails
+          }
+        } else if (message.type == MessageType.video) {
+          final String? base64Video = await VideoService.videoToBase64(
+            message.text,
+          );
+          if (base64Video != null) {
+            messageText = base64Video;
+            LoggerDebug.logger.i('Converted video to Base64 for transmission');
+          } else {
+            LoggerDebug.logger.e('Failed to convert video to Base64');
             return; // Don't send if conversion fails
           }
         }
@@ -340,6 +364,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               return MessageBubble(
                 message: message,
                 isConsecutive: isConsecutive,
+                uuid2P: widget.userData.uuid2P, // ส่ง uuid2P ของผู้รับ
+                onSendMessage: onSendMessage, // ส่ง callback สำหรับส่งข้อความ
               );
             },
           );

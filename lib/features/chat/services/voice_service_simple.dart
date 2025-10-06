@@ -1,12 +1,15 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:audioplayers/audioplayers.dart' as audio_players;
 import 'package:flutter_sound/flutter_sound.dart';
+import 'package:path/path.dart' as path;
 import 'package:moochat/core/helpers/logger_debug.dart';
 
 class VoiceServiceSimple {
-  static final AudioPlayer _player = AudioPlayer();
+  static final audio_players.AudioPlayer _player = audio_players.AudioPlayer();
   static final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   static bool _isPlaying = false;
   static bool _isRecording = false;
@@ -62,12 +65,12 @@ class VoiceServiceSimple {
       String fileName = 'voice_$timestamp.aac';
       String filePath = '${voiceDir.path}/$fileName';
 
-      // Start recording
+      // Start recording with optimized settings for smaller file size
       await _recorder.startRecorder(
         toFile: filePath,
         codec: Codec.aacADTS,
-        bitRate: 128000,
-        sampleRate: 44100,
+        bitRate: 64000, // Reduced bitrate for smaller files
+        sampleRate: 22050, // Reduced sample rate for smaller files
       );
 
       _isRecording = true;
@@ -132,17 +135,26 @@ class VoiceServiceSimple {
 
       LoggerDebug.logger.i('Playing voice: $filePath');
 
-      // Play the audio file using AudioPlayer
-      await _player.play(DeviceFileSource(filePath));
-      _isPlaying = true;
-      _currentPlayingPath = filePath;
-
-      // Listen for completion
+      // Set up player state listeners
       _player.onPlayerComplete.listen((_) {
         _isPlaying = false;
         _currentPlayingPath = null;
         LoggerDebug.logger.i('Playback completed for: $filePath');
       });
+
+      _player.onPlayerStateChanged.listen((state) {
+        LoggerDebug.logger.i('Player state changed: $state');
+        if (state == audio_players.PlayerState.stopped ||
+            state == audio_players.PlayerState.completed) {
+          _isPlaying = false;
+          _currentPlayingPath = null;
+        }
+      });
+
+      // Play the audio file using AudioPlayer
+      await _player.play(audio_players.DeviceFileSource(filePath));
+      _isPlaying = true;
+      _currentPlayingPath = filePath;
 
       return true;
     } catch (e) {
@@ -197,8 +209,8 @@ class VoiceServiceSimple {
       // Try to get actual duration using AudioPlayer
       try {
         // Create a temporary player to get duration
-        AudioPlayer tempPlayer = AudioPlayer();
-        await tempPlayer.setSource(DeviceFileSource(filePath));
+        audio_players.AudioPlayer tempPlayer = audio_players.AudioPlayer();
+        await tempPlayer.setSource(audio_players.DeviceFileSource(filePath));
 
         // Wait a bit for the player to load the file
         await Future.delayed(const Duration(milliseconds: 100));
@@ -244,6 +256,74 @@ class VoiceServiceSimple {
     } catch (e) {
       LoggerDebug.logger.e('Error deleting voice file: $e');
       return false;
+    }
+  }
+
+  /// Convert voice file to Base64 string for transmission
+  static Future<String?> voiceToBase64(String voicePath) async {
+    try {
+      final File voiceFile = File(voicePath);
+      if (!await voiceFile.exists()) {
+        LoggerDebug.logger.e('Voice file does not exist: $voicePath');
+        return null;
+      }
+
+      // Check file size (limit to 3MB for stability)
+      final int fileSize = await voiceFile.length();
+      const int maxSize = 3 * 1024 * 1024; // 3MB
+
+      if (fileSize > maxSize) {
+        LoggerDebug.logger.w(
+          'Voice file too large: ${fileSize / (1024 * 1024)} MB',
+        );
+        return null;
+      }
+
+      LoggerDebug.logger.i('Voice file size: ${fileSize / (1024 * 1024)} MB');
+      final Uint8List voiceBytes = await voiceFile.readAsBytes();
+      final String base64String = base64Encode(voiceBytes);
+
+      LoggerDebug.logger.i(
+        'Voice converted to Base64, size: ${base64String.length} chars',
+      );
+      return base64String;
+    } catch (e) {
+      LoggerDebug.logger.e('Error converting voice to Base64: $e');
+      return null;
+    }
+  }
+
+  /// Save Base64 string as voice file
+  static Future<String?> base64ToVoice(
+    String base64String, {
+    String? fileName,
+  }) async {
+    try {
+      final Uint8List voiceBytes = base64Decode(base64String);
+
+      final Directory appDir = await getApplicationDocumentsDirectory();
+      final String voiceDir = path.join(appDir.path, 'received_voices');
+
+      // Create received_voices directory if it doesn't exist
+      final Directory voiceDirObj = Directory(voiceDir);
+      if (!await voiceDirObj.exists()) {
+        await voiceDirObj.create(recursive: true);
+      }
+
+      // Generate unique filename if not provided
+      final String finalFileName =
+          fileName ?? '${DateTime.now().millisecondsSinceEpoch}.aac';
+      final String savedPath = path.join(voiceDir, finalFileName);
+
+      // Write bytes to file
+      final File savedFile = File(savedPath);
+      await savedFile.writeAsBytes(voiceBytes);
+
+      LoggerDebug.logger.i('Base64 voice saved to: $savedPath');
+      return savedPath;
+    } catch (e) {
+      LoggerDebug.logger.e('Error saving Base64 voice: $e');
+      return null;
     }
   }
 

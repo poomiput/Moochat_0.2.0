@@ -11,11 +11,15 @@ import 'package:moochat/features/chat/ui/widgets/video/video_player_screen.dart'
 class VideoMessageBubble extends StatelessWidget {
   final ChatMessage message;
   final bool showAvatar;
+  final String? uuid2P; // เพิ่ม uuid2P สำหรับการส่งวิดีโอ
+  final Function(ChatMessage)? onSendMessage; // เพิ่ม callback สำหรับส่งข้อความ
 
   const VideoMessageBubble({
     super.key,
     required this.message,
     this.showAvatar = true,
+    this.uuid2P,
+    this.onSendMessage,
   });
 
   @override
@@ -269,7 +273,11 @@ class VideoMessageBubble extends StatelessWidget {
       // Open full-screen video player
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => VideoPlayerScreen(videoFile: videoFile),
+          builder: (context) => VideoPlayerScreen(
+            videoFile: videoFile,
+            uuid2P: uuid2P, // ส่ง uuid2P ของผู้รับ
+            onSendMessage: onSendMessage, // ส่ง callback
+          ),
         ),
       );
     } catch (e) {

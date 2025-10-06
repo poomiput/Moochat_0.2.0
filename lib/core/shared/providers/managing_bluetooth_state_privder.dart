@@ -5,10 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:moochat/core/helpers/logger_debug.dart';
 import 'package:moochat/core/helpers/shared_prefences.dart';
 import 'package:moochat/core/shared/models/nearbay_device_info.dart';
-import 'package:moochat/core/shared/services/bluetooth_services.dart';
+import 'package:moochat/core/shared/services/bluetooth_services_v2.dart';
 import 'package:moochat/features/home/services/notifications_service.dart';
 
-// Provider for managing Bluetooth state with discovered and connected devices
+// Provider for managing Bluetooth s discovered and connected devices
 final nearbayStateProvider =
     StateNotifierProvider<BluetoothStateNotifier, BluetoothState>((ref) {
       return BluetoothStateNotifier();
@@ -285,7 +285,11 @@ class BluetoothStateNotifier extends StateNotifier<BluetoothState> {
       LoggerDebug.logger.i(
         '🟡 RMX3085 DEBUG: Requesting connection to: $deviceId ($uuid)',
       );
-      await _bluetoothService.requestConnection(deviceId, uuid);
+
+      // Get current user name for connection
+      final userName = await SharedPrefHelper.getString('uuid') ?? 'MooChat';
+      await _bluetoothService.requestConnection(deviceId, userName);
+
       LoggerDebug.logger.i(
         '🟡 RMX3085 DEBUG: Connection request sent to: $deviceId',
       );
@@ -416,18 +420,6 @@ class BluetoothStateNotifier extends StateNotifier<BluetoothState> {
     } catch (e) {
       LoggerDebug.logger.e('Error encoding message: $e');
       // Fallback to original message
-      return message;
-    }
-  }
-
-  /// Alternative encoding method if base64 doesn't work with your Bluetooth service
-  String _encodeMessageAlternative(String message) {
-    try {
-      final encoded = Uri.encodeComponent(message);
-      LoggerDebug.logger.d('URL encoded message: $encoded');
-      return encoded;
-    } catch (e) {
-      LoggerDebug.logger.e('Error encoding message with URI: $e');
       return message;
     }
   }
@@ -564,42 +556,6 @@ class BluetoothStateNotifier extends StateNotifier<BluetoothState> {
       }
     } catch (e) {
       LoggerDebug.logger.e('Error sending keep-alive ping: $e');
-    }
-  }
-
-  Future<void> _restartDiscovery() async {
-    try {
-      await stopDiscovery();
-      await Future.delayed(const Duration(seconds: 2));
-      await startDiscovery();
-    } catch (e) {
-      LoggerDebug.logger.e('Error restarting discovery: $e');
-    }
-  }
-
-  Future<void> _restartAllServices() async {
-    try {
-      LoggerDebug.logger.w(
-        'Restarting all Bluetooth services due to connection loss',
-      );
-
-      // Stop everything
-      await stopDiscovery();
-      await stopAdvertising();
-
-      // Clear device lists
-      clearAllDevices();
-
-      // Wait a bit
-      await Future.delayed(const Duration(seconds: 3));
-
-      // Restart everything
-      await startAdvertising();
-      await startDiscovery();
-
-      LoggerDebug.logger.i('All Bluetooth services restarted');
-    } catch (e) {
-      LoggerDebug.logger.e('Error restarting all services: $e');
     }
   }
 

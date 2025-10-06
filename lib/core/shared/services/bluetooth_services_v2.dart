@@ -18,6 +18,10 @@ class BluetoothServicesmoochat {
   // Store discovered devices for UUID lookup
   final Map<String, NearbayDeviceInfo> _discoveredDevices = {};
 
+  // Track connection states
+  final Set<String> _connectedDevices = {};
+  final Set<String> _connectingDevices = {};
+
   // Getters for streams
   Stream<NearbayDeviceInfo> get onDeviceFound => _deviceFoundController.stream;
   Stream<String> get onDeviceLost => _deviceLostController.stream;
@@ -36,12 +40,22 @@ class BluetoothServicesmoochat {
     return _discoveredDevices[deviceId];
   }
 
+  // Check if device is connected
+  bool isConnected(String deviceId) {
+    return _connectedDevices.contains(deviceId);
+  }
+
+  // Check if device is connecting
+  bool isConnecting(String deviceId) {
+    return _connectingDevices.contains(deviceId);
+  }
+
   // start advertising
   Future<void> startAdvertising(String userName) async {
     final Strategy strategy = Strategy.P2P_STAR;
     try {
       LoggerDebug.logger.i('🟡 Starting advertising with userName: $userName');
-      
+
       await Nearby().startAdvertising(
         userName,
         strategy,
@@ -59,11 +73,18 @@ class BluetoothServicesmoochat {
           LoggerDebug.logger.i(
             '🟡 Connection result: $id, Status: ${status.toString()}',
           );
+
+          _connectingDevices.remove(id);
+
           if (status == Status.CONNECTED) {
+            _connectedDevices.add(id);
+
             // Try to get the uuid from discovered devices
             String deviceUuid = getUuidByDeviceId(id) ?? '';
 
-            LoggerDebug.logger.i('🟢 Connected device ID: $id, UUID: $deviceUuid');
+            LoggerDebug.logger.i(
+              '🟢 Connected device ID: $id, UUID: $deviceUuid',
+            );
 
             // Add connected device to stream
             final device = NearbayDeviceInfo(
@@ -82,6 +103,8 @@ class BluetoothServicesmoochat {
         onDisconnected: (String id) {
           // Called whenever a discoverer disconnects from advertiser
           LoggerDebug.logger.w('🔴 Disconnected from: $id');
+          _connectedDevices.remove(id);
+          _connectingDevices.remove(id);
           _deviceLostController.add(id);
           // Remove from discovered devices cache
           _discoveredDevices.remove(id);
@@ -91,10 +114,12 @@ class BluetoothServicesmoochat {
       LoggerDebug.logger.i('🟢 Advertising started successfully');
     } catch (exception) {
       LoggerDebug.logger.e('🔴 Error starting advertising: $exception');
-      
+
       // Provide more specific error messages
       if (exception.toString().contains('PERMISSION')) {
-        LoggerDebug.logger.e('🔴 Permission denied - check location and bluetooth permissions');
+        LoggerDebug.logger.e(
+          '🔴 Permission denied - check location and bluetooth permissions',
+        );
       } else if (exception.toString().contains('BLUETOOTH')) {
         LoggerDebug.logger.e('🔴 Bluetooth not available or disabled');
       }
@@ -108,7 +133,7 @@ class BluetoothServicesmoochat {
 
     try {
       LoggerDebug.logger.i('🟡 Starting discovery with userName: $userName');
-      
+
       await Nearby().startDiscovery(
         userName,
         strategy,
@@ -133,6 +158,8 @@ class BluetoothServicesmoochat {
         onEndpointLost: (String? id) {
           LoggerDebug.logger.w('🔴 Endpoint lost: $id');
           if (id != null) {
+            _connectedDevices.remove(id);
+            _connectingDevices.remove(id);
             _deviceLostController.add(id);
             // Remove from discovered devices cache
             _discoveredDevices.remove(id);
@@ -143,10 +170,12 @@ class BluetoothServicesmoochat {
       LoggerDebug.logger.i('🟢 Discovery started successfully');
     } catch (e) {
       LoggerDebug.logger.e('🔴 Error starting discovery: $e');
-      
+
       // Provide more specific error messages
       if (e.toString().contains('PERMISSION')) {
-        LoggerDebug.logger.e('🔴 Permission denied - check location permissions');
+        LoggerDebug.logger.e(
+          '🔴 Permission denied - check location permissions',
+        );
       } else if (e.toString().contains('BLUETOOTH')) {
         LoggerDebug.logger.e('🔴 Bluetooth not available or disabled');
       }
@@ -176,82 +205,172 @@ class BluetoothServicesmoochat {
     }
   }
 
-  // Request connection to a device
-  Future<bool> requestConnection(String deviceId) async {
+  // Request connection to a device - ENHANCED VERSION
+  Future<bool> requestConnection(String deviceId, String userName) async {
     try {
-      print('[Bluetooth] 🔄 Starting connection request to: $deviceId');
-      
+      LoggerDebug.logger.i(
+        '[Bluetooth] 🔄 Starting connection request to: $deviceId',
+      );
+
       // First check if already connected
       if (_connectedDevices.contains(deviceId)) {
-        print('[Bluetooth] ✅ Already connected to: $deviceId');
+        LoggerDebug.logger.i('[Bluetooth] ✅ Already connected to: $deviceId');
         return true;
       }
 
+      // Check if already connecting
+      if (_connectingDevices.contains(deviceId)) {
+        LoggerDebug.logger.i('[Bluetooth] ⏳ Already connecting to: $deviceId');
+        return await _waitForConnection(deviceId);
+      }
+
+      // Mark as connecting
+      _connectingDevices.add(deviceId);
+
       // Add longer delay and retry mechanism
       await Future.delayed(const Duration(milliseconds: 1500));
-      
+
       // Check if device is still in discovered list
-      if (!_discoveredDevices.any((device) => device.endpointId == deviceId)) {
-        print('[Bluetooth] ⚠️ Device $deviceId not in discovered list, refreshing discovery...');
+      if (!_discoveredDevices.containsKey(deviceId)) {
+        LoggerDebug.logger.w(
+          '[Bluetooth] ⚠️ Device $deviceId not in discovered list, refreshing discovery...',
+        );
         await stopDiscovery();
         await Future.delayed(const Duration(milliseconds: 500));
-        await startDiscovery();
+        await startDiscovery(userName);
         await Future.delayed(const Duration(milliseconds: 2000));
-        
-        if (!_discoveredDevices.any((device) => device.endpointId == deviceId)) {
-          print('[Bluetooth] ❌ Device $deviceId still not found after refresh');
-          throw Exception('Device not found after discovery refresh');
+
+        if (!_discoveredDevices.containsKey(deviceId)) {
+          LoggerDebug.logger.e(
+            '[Bluetooth] ❌ Device $deviceId still not found after refresh',
+          );
+          _connectingDevices.remove(deviceId);
+          return false;
         }
       }
 
-      print('[Bluetooth] 📤 Requesting connection to: $deviceId');
+      LoggerDebug.logger.i(
+        '[Bluetooth] 📤 Requesting connection to: $deviceId',
+      );
+
       await Nearby().requestConnection(
         userName,
         deviceId,
         onConnectionInitiated: (String endpointId, ConnectionInfo connectionInfo) {
-          print('[Bluetooth] 🤝 Connection initiated with: $endpointId');
-          print('[Bluetooth] � Auth token: ${connectionInfo.authenticationToken}');
-          print('[Bluetooth] 📱 Device name: ${connectionInfo.endpointName}');
-          print('[Bluetooth] 🔄 Is incoming: ${connectionInfo.isIncomingConnection}');
-          
+          LoggerDebug.logger.i(
+            '[Bluetooth] 🤝 Connection initiated with: $endpointId',
+          );
+          LoggerDebug.logger.i(
+            '[Bluetooth] 🔐 Auth token: ${connectionInfo.authenticationToken}',
+          );
+          LoggerDebug.logger.i(
+            '[Bluetooth] 📱 Device name: ${connectionInfo.endpointName}',
+          );
+          LoggerDebug.logger.i(
+            '[Bluetooth] 🔄 Is incoming: ${connectionInfo.isIncomingConnection}',
+          );
+
           // Auto-accept the connection
-          _acceptConnection(endpointId);
+          acceptConnection(endpointId);
         },
         onConnectionResult: (String endpointId, Status status) {
-          print('[Bluetooth] � Connection result for $endpointId: ${status.toString()}');
+          LoggerDebug.logger.i(
+            '[Bluetooth] 📊 Connection result for $endpointId: ${status.toString()}',
+          );
+
+          _connectingDevices.remove(endpointId);
+
           if (status == Status.CONNECTED) {
-            print('[Bluetooth] ✅ Successfully connected to: $endpointId');
+            LoggerDebug.logger.i(
+              '[Bluetooth] ✅ Successfully connected to: $endpointId',
+            );
             _connectedDevices.add(endpointId);
-            notifyListeners();
+
+            // Get device info and add to connected stream
+            final deviceInfo = _discoveredDevices[endpointId];
+            if (deviceInfo != null) {
+              _deviceConnectedController.add(deviceInfo);
+            }
           } else {
-            print('[Bluetooth] ❌ Connection failed to: $endpointId, Status: ${status.toString()}');
+            LoggerDebug.logger.e(
+              '[Bluetooth] ❌ Connection failed to: $endpointId, Status: ${status.toString()}',
+            );
             _handleConnectionError(status);
           }
         },
         onDisconnected: (String endpointId) {
-          print('[Bluetooth] � Disconnected from: $endpointId');
+          LoggerDebug.logger.w('[Bluetooth] 🔌 Disconnected from: $endpointId');
           _connectedDevices.remove(endpointId);
-          notifyListeners();
+          _connectingDevices.remove(endpointId);
+          _deviceLostController.add(endpointId);
+          _discoveredDevices.remove(endpointId);
         },
       );
 
       // Wait for connection to establish with timeout
-      int attempts = 0;
-      const maxAttempts = 10; // 10 seconds timeout
-      while (!_connectedDevices.contains(deviceId) && attempts < maxAttempts) {
-        await Future.delayed(const Duration(milliseconds: 1000));
-        attempts++;
-        print('[Bluetooth] ⏳ Waiting for connection... Attempt $attempts/$maxAttempts');
-      }
+      final isConnected = await _waitForConnection(deviceId);
 
-      final isConnected = _connectedDevices.contains(deviceId);
-      print('[Bluetooth] ${isConnected ? '✅ Connection successful' : '❌ Connection timeout'} for: $deviceId');
-      
+      LoggerDebug.logger.i(
+        '[Bluetooth] ${isConnected ? '✅ Connection successful' : '❌ Connection timeout'} for: $deviceId',
+      );
+
       return isConnected;
     } catch (e) {
-      print('[Bluetooth] ❌ Connection request failed: $e');
-      _handleConnectionError(null, errorMessage: e.toString());
+      LoggerDebug.logger.e('[Bluetooth] ❌ Connection request failed: $e');
+      _connectingDevices.remove(deviceId);
       return false;
+    }
+  }
+
+  // Helper method to wait for connection
+  Future<bool> _waitForConnection(String deviceId) async {
+    int attempts = 0;
+    const maxAttempts = 15; // 15 seconds timeout
+
+    while (attempts < maxAttempts) {
+      await Future.delayed(const Duration(milliseconds: 1000));
+      attempts++;
+
+      // Check if connected
+      if (_connectedDevices.contains(deviceId)) {
+        return true;
+      }
+
+      // Check if no longer connecting (failed)
+      if (!_connectingDevices.contains(deviceId)) {
+        return false;
+      }
+
+      LoggerDebug.logger.i(
+        '[Bluetooth] ⏳ Waiting for connection... Attempt $attempts/$maxAttempts',
+      );
+    }
+
+    // Timeout
+    _connectingDevices.remove(deviceId);
+    return false;
+  }
+
+  // Helper method to handle connection errors
+  void _handleConnectionError(Status? status, {String? errorMessage}) {
+    if (status != null) {
+      switch (status) {
+        case Status.REJECTED:
+          LoggerDebug.logger.e(
+            '[Bluetooth] Connection rejected by remote device',
+          );
+          break;
+        case Status.ERROR:
+          LoggerDebug.logger.e('[Bluetooth] Connection error occurred');
+          break;
+        case Status.CONNECTED:
+          LoggerDebug.logger.i('[Bluetooth] Connected successfully');
+          break;
+      }
+    }
+
+    if (errorMessage != null) {
+      LoggerDebug.logger.e('[Bluetooth] Error: $errorMessage');
     }
   }
 
@@ -259,14 +378,16 @@ class BluetoothServicesmoochat {
   Future<void> acceptConnection(String deviceId) async {
     try {
       LoggerDebug.logger.i('🟡 Accepting connection from: $deviceId');
-      
+
       await Nearby().acceptConnection(
         deviceId,
         onPayLoadRecieved: (String endpointId, Payload payload) {
           // Handle received messages
           if (payload.type == PayloadType.BYTES) {
             final String message = String.fromCharCodes(payload.bytes!);
-            LoggerDebug.logger.i('🟢 Message received from $endpointId: $message');
+            LoggerDebug.logger.i(
+              '🟢 Message received from $endpointId: $message',
+            );
 
             // Add received message to stream
             _messageReceivedController.add({
@@ -278,22 +399,33 @@ class BluetoothServicesmoochat {
             // Handle file payload if needed
           }
         },
+        onPayloadTransferUpdate:
+            (String endpointId, PayloadTransferUpdate payloadTransferUpdate) {
+              LoggerDebug.logger.i(
+                '🟡 Payload transfer update: $endpointId - ${payloadTransferUpdate.status}',
+              );
+            },
       );
-      LoggerDebug.logger.i('🟢 Accepted connection from: $deviceId');
     } catch (e) {
       LoggerDebug.logger.e('🔴 Error accepting connection: $e');
-      rethrow;
     }
   }
 
-  // Send message to a specific device
+  // Send message to a connected device
   Future<bool> sendMessage(String deviceId, String message) async {
     try {
+      if (!_connectedDevices.contains(deviceId)) {
+        LoggerDebug.logger.e(
+          '🔴 Cannot send message: not connected to device $deviceId',
+        );
+        return false;
+      }
+
       LoggerDebug.logger.i('🟡 Sending message to $deviceId: $message');
-      
+
       final Uint8List bytes = Uint8List.fromList(message.codeUnits);
       await Nearby().sendBytesPayload(deviceId, bytes);
-      
+
       LoggerDebug.logger.i('🟢 Message sent successfully to $deviceId');
       return true;
     } catch (e) {
@@ -302,47 +434,61 @@ class BluetoothServicesmoochat {
     }
   }
 
-  // Send message to all connected devices
-  Future<void> sendMessageToAll(String message) async {
+  // Disconnect from a device
+  Future<void> disconnectFromDevice(String deviceId) async {
     try {
-      LoggerDebug.logger.i('🟡 Broadcasting message to all devices: $message');
-      
-      final Uint8List bytes = Uint8List.fromList(message.codeUnits);
-      await Nearby().sendBytesPayload('', bytes); // Empty string sends to all
-      
-      LoggerDebug.logger.i('🟢 Message broadcasted successfully');
+      await Nearby().disconnectFromEndpoint(deviceId);
+      _connectedDevices.remove(deviceId);
+      _connectingDevices.remove(deviceId);
+      LoggerDebug.logger.i('🟢 Disconnected from device: $deviceId');
     } catch (e) {
-      LoggerDebug.logger.e('🔴 Error broadcasting message: $e');
-      rethrow;
+      LoggerDebug.logger.e('🔴 Error disconnecting from device $deviceId: $e');
     }
   }
 
-  // Get all discovered devices
-  Map<String, NearbayDeviceInfo> get discoveredDevices =>
-      Map.from(_discoveredDevices);
+  // Disconnect from all devices
+  Future<void> disconnectAll() async {
+    try {
+      await Nearby().stopAllEndpoints();
+      _connectedDevices.clear();
+      _connectingDevices.clear();
+      _discoveredDevices.clear();
+      LoggerDebug.logger.i('🟢 Disconnected from all devices');
+    } catch (e) {
+      LoggerDebug.logger.e('🔴 Error disconnecting from all devices: $e');
+    }
+  }
 
-  // Clear discovered devices cache
+  // Get list of connected devices
+  List<String> getConnectedDevices() {
+    return _connectedDevices.toList();
+  }
+
+  // Get list of discovered devices
+  Map<String, NearbayDeviceInfo> getDiscoveredDevices() {
+    return Map.from(_discoveredDevices);
+  }
+
+  // Send message to all connected devices
+  Future<void> sendMessageToAll(String message) async {
+    final connectedDevicesList = _connectedDevices.toList();
+
+    for (String deviceId in connectedDevicesList) {
+      await sendMessage(deviceId, message);
+    }
+  }
+
+  // Clear discovered devices (for compatibility)
   void clearDiscoveredDevices() {
     _discoveredDevices.clear();
     LoggerDebug.logger.i('🟢 Cleared discovered devices cache');
   }
 
-  // Get connection status
-  bool isDeviceConnected(String deviceId) {
-    // This is a simple check - you might want to implement more sophisticated logic
-    return _discoveredDevices.containsKey(deviceId);
-  }
-
   // Dispose streams
   void dispose() {
-    LoggerDebug.logger.i('🟡 Disposing bluetooth service streams');
-    
     _deviceFoundController.close();
     _deviceLostController.close();
     _deviceConnectedController.close();
     _messageReceivedController.close();
-    _discoveredDevices.clear();
-    
-    LoggerDebug.logger.i('🟢 Bluetooth service disposed');
   }
 }

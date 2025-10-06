@@ -12,10 +12,18 @@ import 'package:moochat/features/chat/ui/widgets/video/video_message_bubble.dart
 import 'package:url_launcher/url_launcher.dart';
 
 class MessageBubble extends StatelessWidget {
-  MessageBubble({super.key, required this.message, this.isConsecutive = false});
+  MessageBubble({
+    super.key,
+    required this.message,
+    this.isConsecutive = false,
+    this.uuid2P,
+    this.onSendMessage,
+  });
 
   final bool isConsecutive;
   final ChatMessage message;
+  final String? uuid2P; // เพิ่ม uuid2P สำหรับการส่งวิดีโอ
+  final Function(ChatMessage)? onSendMessage; // เพิ่ม callback สำหรับส่งข้อความ
   late final bool isMe = message.isSentByMe;
 
   @override
@@ -32,7 +40,12 @@ class MessageBubble extends StatelessWidget {
 
     // Use specialized video bubble for video messages
     if (message.type == MessageType.video) {
-      return VideoMessageBubble(message: message, showAvatar: !isConsecutive);
+      return VideoMessageBubble(
+        message: message,
+        showAvatar: !isConsecutive,
+        uuid2P: uuid2P, // ส่ง uuid2P ไปให้ VideoMessageBubble
+        onSendMessage: onSendMessage, // ส่ง callback ไปให้ VideoMessageBubble
+      );
     }
 
     return InkWell(

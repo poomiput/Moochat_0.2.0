@@ -1,24 +1,41 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:video_player/video_player.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:moochat/core/theming/colors.dart';
+import 'package:moochat/core/helpers/logger_debug.dart' as logger;
+import 'package:moochat/core/helpers/shared_prefences.dart';
+import 'package:moochat/core/shared/providers/managing_bluetooth_state_privder.dart';
+import 'package:moochat/features/chat/data/enums/message_status.dart';
+import 'package:moochat/features/chat/data/enums/message_type.dart';
+import 'package:moochat/features/chat/data/models/chat_message_model.dart';
+import 'package:moochat/core/services/video_service.dart';
 
-class VideoPlayerScreen extends StatefulWidget {
+class VideoPlayerScreen extends ConsumerStatefulWidget {
   final File videoFile;
+  final String? uuid2P; // UUID ของผู้รับที่จะส่งวิดีโอไป
+  final Function(ChatMessage)? onSendMessage; // Callback สำหรับส่งข้อความ
 
-  const VideoPlayerScreen({super.key, required this.videoFile});
+  const VideoPlayerScreen({
+    super.key,
+    required this.videoFile,
+    this.uuid2P,
+    this.onSendMessage,
+  });
 
   @override
-  State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
+  ConsumerState<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
 }
 
-class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
+class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   bool _showControls = true;
   bool _isLoading = true;
+  bool _isSending = false; // เพิ่มตัวแปรสำหรับสถานะการส่ง
   String? _errorMessage;
 
   @override
@@ -122,6 +139,139 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     return '$minutes:$seconds';
   }
 
+  // ฟังก์ชั่นส่งวิดีโอผ่าน Bluetooth
+  Future<void> _sendVideo() async {
+    if (widget.uuid2P == null) {
+      _showSnackBar('ไม่สามารถส่งได้: ไม่พบผู้รับ', isError: true);
+      return;
+    }
+
+    setState(() {
+      _isSending = true;
+    });
+
+    try {
+      logger.LoggerDebug.logger.i(
+        'Starting to send video: ${widget.videoFile.path}',
+      );
+
+      // ตรวจสอบและบีบอัดวิดีโอถ้าจำเป็น
+      final double originalSizeMB = await VideoService.getVideoSizeMB(
+        widget.videoFile.path,
+      );
+
+      logger.LoggerDebug.logger.i(
+        'Original video size: ${originalSizeMB.toStringAsFixed(1)}MB',
+      );
+
+      // บีบอัดวิดีโอถ้าจำเป็น
+      File processedVideoFile = await VideoService.compressVideo(
+        widget.videoFile,
+      );
+
+      final double finalSizeMB = await VideoService.getVideoSizeMB(
+        processedVideoFile.path,
+      );
+
+      logger.LoggerDebug.logger.i(
+        'Final video size: ${finalSizeMB.toStringAsFixed(1)}MB',
+      );
+
+      // แสดงข้อมูลการบีบอัด
+      if (originalSizeMB != finalSizeMB) {
+        _showSnackBar(
+          'บีบอัดวิดีโอสำเร็จ: ${originalSizeMB.toStringAsFixed(1)}MB → ${finalSizeMB.toStringAsFixed(1)}MB',
+          isError: false,
+        );
+      }
+
+      // แปลงวิดีโอเป็น Base64
+      final String? base64Video = await VideoService.videoToBase64(
+        processedVideoFile.path,
+      );
+      if (base64Video == null) {
+        _showSnackBar('ไม่สามารถแปลงวิดีโอได้', isError: true);
+        return;
+      }
+
+      // สร้าง ChatMessage สำหรับวิดีโอ
+      final myUUID = await SharedPrefHelper.getString('uuid');
+      final myUsername = await SharedPrefHelper.getString('username');
+
+      final ChatMessage videoMessage = ChatMessage.video(
+        videoPath: widget.videoFile.path,
+        isSentByMe: true,
+        status: MessageStatus.sending,
+        username2P: myUsername ?? 'Unknown',
+        uuid2P: myUUID ?? '',
+      );
+
+      // เพิ่มข้อความในแชทก่อน (ให้ผู้ส่งเห็น)
+      if (widget.onSendMessage != null) {
+        widget.onSendMessage!(videoMessage);
+      }
+
+      // ส่งผ่าน Bluetooth
+      final bluetoothProvider = ref.read(nearbayStateProvider.notifier);
+      final isConnected = bluetoothProvider.isUserConnected(widget.uuid2P!);
+
+      if (!isConnected) {
+        _showSnackBar('ไม่ได้เชื่อมต่อกับผู้รับ', isError: true);
+        return;
+      }
+
+      final device = bluetoothProvider.getConnectedDeviceByUsername(
+        widget.uuid2P!,
+      );
+      if (device == null) {
+        _showSnackBar('ไม่พบอุปกรณ์ผู้รับ', isError: true);
+        return;
+      }
+
+      // สร้าง payload สำหรับส่ง
+      final messagePayload = {
+        'id': videoMessage.id,
+        'text': base64Video, // ส่ง Base64 string
+        'timestamp': videoMessage.timestamp.toIso8601String(),
+        'type': MessageType.video.toString(),
+        'senderUsername': myUUID,
+      };
+
+      final jsonMessage = jsonEncode(messagePayload);
+      logger.LoggerDebug.logger.i('Sending video message to ${device.id}');
+
+      final sendResult = await bluetoothProvider.sendMessageToDevice(
+        device.id,
+        jsonMessage,
+      );
+
+      if (sendResult) {
+        _showSnackBar('ส่งวิดีโอสำเร็จ');
+        // กลับไปหน้าแชทหลังส่งสำเร็จ
+        Navigator.of(context).pop();
+      } else {
+        _showSnackBar('ส่งวิดีโอไม่สำเร็จ', isError: true);
+      }
+    } catch (e) {
+      logger.LoggerDebug.logger.e('Error sending video: $e');
+      _showSnackBar('เกิดข้อผิดพลาด: $e', isError: true);
+    } finally {
+      setState(() {
+        _isSending = false;
+      });
+    }
+  }
+
+  void _showSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
+        duration: Duration(seconds: isError ? 4 : 2),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _controller?.dispose();
@@ -189,7 +339,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       color: Colors.black.withOpacity(0.3),
       child: Column(
         children: [
-          // Top bar with close button
+          // Top bar with close button and send button
           Padding(
             padding: EdgeInsets.all(16.w),
             child: Row(
@@ -213,6 +363,80 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   ),
                 ),
                 const Spacer(),
+
+                // ปุ่มส่งวิดีโอ (แสดงเฉพาะเมื่อมี uuid2P)
+                if (widget.uuid2P != null && !_isSending)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _sendVideo,
+                      borderRadius: BorderRadius.circular(24),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12.w,
+                          vertical: 8.h,
+                        ),
+                        decoration: BoxDecoration(
+                          color: ColorsManager.primary,
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.send, color: Colors.white, size: 20.sp),
+                            SizedBox(width: 4.w),
+                            Text(
+                              'ส่ง',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // แสดง loading indicator เมื่อกำลังส่ง
+                if (_isSending)
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 12.w,
+                      vertical: 8.h,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.grey,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 16.w,
+                          height: 16.h,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 8.w),
+                        Text(
+                          'กำลังส่ง...',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14.sp,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                if (widget.uuid2P != null) SizedBox(width: 8.w),
+
                 Material(
                   color: Colors.transparent,
                   child: InkWell(

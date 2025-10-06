@@ -2,12 +2,12 @@ import 'dart:io';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:moochat/core/helpers/logger_debug.dart';
 import 'package:moochat/core/theming/styles.dart';
 
 import 'package:moochat/core/widgets/loading_animation.dart'; // Needed for photo loading animation
 import 'package:moochat/features/chat/services/image_service.dart';
+import 'package:moochat/core/services/video_service.dart';
 import 'package:moochat/features/chat/ui/widgets/image/image_picker_dialog.dart';
 // import 'package:location/location.dart'; // Temporarily commented out
 
@@ -159,12 +159,27 @@ class _AttachmentOptionsState extends State<AttachmentOptions> {
     });
 
     try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? video = await picker.pickVideo(source: ImageSource.gallery);
+      final File? videoFile = await VideoService.pickVideoFromGallery();
 
-      if (video != null) {
-        final File videoFile = File(video.path);
+      if (videoFile != null) {
         LoggerDebug.logger.i('Video selected: ${videoFile.path}');
+
+        // Check video size
+        final double videoSizeMB = await VideoService.getVideoSizeMB(
+          videoFile.path,
+        );
+        if (videoSizeMB > 50) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Video too large (${videoSizeMB.toStringAsFixed(1)}MB). Max size is 50MB.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
 
         // Call the callback if provided
         widget.onVideoSelected?.call(videoFile);

@@ -13,6 +13,7 @@ import 'package:moochat/features/chat/data/enums/message_status.dart';
 import 'package:moochat/features/chat/data/enums/message_type.dart';
 import 'package:moochat/features/chat/data/models/chat_message_model.dart';
 import 'package:moochat/features/chat/services/image_service.dart';
+import 'package:moochat/core/services/video_service.dart';
 import 'package:moochat/features/chat/services/voice_service_simple.dart';
 import 'package:moochat/features/chat/ui/widgets/attachment_options.dart';
 // import 'package:location/location.dart'; // Temporarily commented out
@@ -123,17 +124,27 @@ class _CustomTextInputFieldState extends ConsumerState<CustomTextInputField> {
     final myUUID = await SharedPrefHelper.getString('uuid');
     final myUsername = await SharedPrefHelper.getString('username');
 
-    // Create voice message using the voice constructor
-    final ChatMessage voiceMessage = ChatMessage.voice(
-      voicePath: voiceFile.path,
+    // Convert voice to Base64 for transmission
+    final String? base64Voice = await VoiceServiceSimple.voiceToBase64(
+      voiceFile.path,
+    );
+
+    if (base64Voice == null) {
+      LoggerDebug.logger.e('Failed to convert voice to Base64');
+      return;
+    }
+
+    // Create voice message with local path for display (sender hears voice)
+    final ChatMessage localVoiceMessage = ChatMessage.voice(
+      voicePath: voiceFile.path, // Local path for sender to hear voice
       isSentByMe: true,
-      status: MessageStatus.delivered,
+      status: MessageStatus.sending,
       username2P: myUsername ?? 'Unknown',
       uuid2P: myUUID ?? '',
     );
 
-    // Call onSendMessage callback if provided
-    widget.onSendMessage?.call(voiceMessage);
+    // Call onSendMessage callback with LOCAL voice message (sender hears voice)
+    widget.onSendMessage?.call(localVoiceMessage);
   }
 
   void _sendVideo(File videoFile) async {
@@ -141,17 +152,50 @@ class _CustomTextInputFieldState extends ConsumerState<CustomTextInputField> {
     final myUUID = await SharedPrefHelper.getString('uuid');
     final myUsername = await SharedPrefHelper.getString('username');
 
-    // Create video message using the video constructor
-    final ChatMessage videoMessage = ChatMessage.video(
-      videoPath: videoFile.path,
+    // Check video size first
+    final double videoSizeMB = await VideoService.getVideoSizeMB(
+      videoFile.path,
+    );
+    if (videoSizeMB > 50) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Video too large (${videoSizeMB.toStringAsFixed(1)}MB). Max size is 50MB.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Save video to app directory for consistent storage
+    final String? savedPath = await VideoService.saveVideoToAppDirectory(
+      videoFile,
+      'video_${DateTime.now().millisecondsSinceEpoch}.mp4',
+    );
+    if (savedPath == null) {
+      LoggerDebug.logger.e('Failed to save video to app directory');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to process video')),
+        );
+      }
+      return;
+    }
+
+    // Create video message with local path for display (sender sees video)
+    final ChatMessage localVideoMessage = ChatMessage.video(
+      videoPath: savedPath, // Use saved path for sender to see video
       isSentByMe: true,
-      status: MessageStatus.delivered,
+      status: MessageStatus.sending,
       username2P: myUsername ?? 'Unknown',
       uuid2P: myUUID ?? '',
     );
 
-    // Call onSendMessage callback if provided
-    widget.onSendMessage?.call(videoMessage);
+    // Call onSendMessage callback with LOCAL video message (sender sees video)
+    // The Base64 conversion and transmission will be handled in chat_screen.dart
+    widget.onSendMessage?.call(localVideoMessage);
   }
 
   void _sendMessage() async {

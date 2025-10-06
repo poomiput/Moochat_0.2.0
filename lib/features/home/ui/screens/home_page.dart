@@ -125,7 +125,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 ref.read(nearbayStateProvider.notifier).startDiscovery();
               });
             },
-            backgroundColor: Colors.orange,
+            backgroundColor: const Color.fromARGB(255, 87, 83, 78),
             child: Icon(
               Icons.refresh,
               color: ColorsManager.whiteColor,

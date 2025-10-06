@@ -1,0 +1,14 @@
+@startuml
+hide circle
+skinparam classAttributeIconSize 0
+
+abstract class UserAccount {
+  +userId: UUID
+  +phone: String
+}
+
+class Member extends UserAccount {
+  +fullName: String
+}
+
+@enduml

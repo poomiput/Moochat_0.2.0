@@ -8,6 +8,8 @@ import 'package:moochat/features/chat/data/enums/message_status.dart';
 import 'package:moochat/features/chat/data/enums/message_type.dart';
 import 'package:moochat/features/chat/data/models/chat_message_model.dart';
 import 'package:moochat/features/chat/services/image_service.dart';
+import 'package:moochat/core/services/video_service.dart';
+import 'package:moochat/features/chat/services/voice_service_simple.dart';
 import 'package:moochat/features/home/providrs/user_data_provider.dart';
 import 'package:moochat/features/home/services/notifications_service.dart';
 
@@ -116,12 +118,50 @@ class MessageHandler {
           LoggerDebug.logger.e('Error processing received image: $e');
           finalText = 'Image not available'; // Fallback text
         }
+      } else if (messageType == MessageType.voice && text.isNotEmpty) {
+        try {
+          // Save Base64 voice to local file
+          final String? savedVoicePath = await VoiceServiceSimple.base64ToVoice(
+            text,
+            fileName: 'received_${messageId}.aac',
+          );
+
+          if (savedVoicePath != null) {
+            finalText = savedVoicePath; // Use local path for playback
+            LoggerDebug.logger.i('Voice saved to: $savedVoicePath');
+          } else {
+            LoggerDebug.logger.e('Failed to save received voice');
+            finalText = 'Voice not available'; // Fallback text
+          }
+        } catch (e) {
+          LoggerDebug.logger.e('Error processing received voice: $e');
+          finalText = 'Voice not available'; // Fallback text
+        }
+      } else if (messageType == MessageType.video && text.isNotEmpty) {
+        try {
+          // Save Base64 video to local file
+          final String? savedVideoPath = await VideoService.base64ToVideo(
+            text,
+            'received_${messageId}.mp4',
+          );
+
+          if (savedVideoPath != null) {
+            finalText = savedVideoPath; // Use local path for playback
+            LoggerDebug.logger.i('Video saved to: $savedVideoPath');
+          } else {
+            LoggerDebug.logger.e('Failed to save received video');
+            finalText = 'Video not available'; // Fallback text
+          }
+        } catch (e) {
+          LoggerDebug.logger.e('Error processing received video: $e');
+          finalText = 'Video not available'; // Fallback text
+        }
       }
 
       // Create ChatMessage object
       final ChatMessage incomingMessage = ChatMessage(
         id: messageId,
-        text: finalText, // Use processed text (image path or original text)
+        text: finalText, // Use processed text (media path or original text)
         isSentByMe: false,
         timestamp: timestamp,
         status: MessageStatus.delivered,

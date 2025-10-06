@@ -4,7 +4,7 @@ description: "moo chat is a cross-platform messaging app that allows users to co
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
-version: 1.1.2+70
+version: 1.1.2+90
 license: MIT
 
 environment:
@@ -54,8 +54,14 @@ dependencies:
   pinput: ^5.0.1
   # voice recording and audio playback
   audioplayers: ^5.2.1
-  # video playback
+  # video playbook
   video_player: ^2.9.1
+  # image compression
+  flutter_image_compress: ^2.3.0
+  # video compression
+  video_compress: ^3.1.3
+  # file manipulation
+  image: ^4.2.0
 
 dev_dependencies:
   flutter_test:
